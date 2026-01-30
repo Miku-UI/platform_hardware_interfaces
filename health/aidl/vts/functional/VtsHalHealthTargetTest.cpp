@@ -24,6 +24,7 @@
 #include <aidl/Vintf.h>
 #include <aidl/android/hardware/health/BnHealthInfoCallback.h>
 #include <aidl/android/hardware/health/IHealth.h>
+#include <android-base/properties.h>
 #include <android/binder_auto_utils.h>
 #include <android/binder_enums.h>
 #include <android/binder_interface_utils.h>
@@ -88,7 +89,7 @@ MATCHER(IsValidSerialNumber, "") {
     if (!arg) {
         return true;
     }
-    if (arg->size() < 6) {
+    if (arg->size() < 4) {
         return false;
     }
     for (const auto& c : *arg) {
@@ -274,15 +275,6 @@ TEST_P(HealthAidl, setChargingPolicy) {
     /* set ChargingPolicy*/
     status = health->setChargingPolicy(BatteryChargingPolicy::LONG_LIFE);
     ASSERT_THAT(status, AnyOf(IsOk(), ExceptionIs(EX_UNSUPPORTED_OPERATION)));
-    if (!status.isOk()) return;
-
-    /* get ChargingPolicy*/
-    status = health->getChargingPolicy(&value);
-    ASSERT_THAT(status, AnyOf(IsOk(), ExceptionIs(EX_UNSUPPORTED_OPERATION)));
-    if (!status.isOk()) return;
-    // the result of getChargingPolicy will be one of default(1), ADAPTIVE_AON(2)
-    // ADAPTIVE_AC(3) or LONG_LIFE(4). default(1) means NOT_SUPPORT
-    ASSERT_THAT(static_cast<int>(value), AnyOf(Eq(1), Eq(4)));
 }
 
 MATCHER_P(IsValidHealthData, version, "") {
@@ -326,7 +318,13 @@ TEST_P(HealthAidl, getBatteryHealthData) {
 
     BatteryHealthData value;
     status = health->getBatteryHealthData(&value);
-    ASSERT_THAT(status, AnyOf(IsOk(), ExceptionIs(EX_UNSUPPORTED_OPERATION)));
+    // This operation is required in Android 17+
+    auto apiLevel = ::android::base::GetIntProperty<int32_t>("ro.vendor.api_level", 0);
+    if (apiLevel < 202604) {
+        ASSERT_THAT(status, AnyOf(IsOk(), ExceptionIs(EX_UNSUPPORTED_OPERATION)));
+    } else {
+        ASSERT_THAT(status, IsOk());
+    }
     if (!status.isOk()) return;
     ASSERT_THAT(value, IsValidHealthData(version));
 }

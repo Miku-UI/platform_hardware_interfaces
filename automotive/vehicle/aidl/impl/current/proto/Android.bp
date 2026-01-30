@@ -57,6 +57,7 @@ genrule {
         "android/hardware/automotive/vehicle/VehiclePropValueRequest.pb.h",
         "android/hardware/automotive/vehicle/SubscribeOptions.pb.h",
         "android/hardware/automotive/vehicle/SubscribeRequest.pb.h",
+        "android/hardware/automotive/vehicle/SupportedValuesChange.pb.h",
         "android/hardware/automotive/vehicle/UnsubscribeRequest.pb.h",
     ],
 }
@@ -89,6 +90,7 @@ genrule {
         "android/hardware/automotive/vehicle/VehiclePropValueRequest.pb.cc",
         "android/hardware/automotive/vehicle/SubscribeOptions.pb.cc",
         "android/hardware/automotive/vehicle/SubscribeRequest.pb.cc",
+        "android/hardware/automotive/vehicle/SupportedValuesChange.pb.cc",
         "android/hardware/automotive/vehicle/UnsubscribeRequest.pb.cc",
     ],
 }
@@ -97,9 +99,6 @@ cc_library_static {
     name: "VehicleHalProtos",
     vendor: true,
     host_supported: true,
-    include_dirs: [
-        "external/protobuf/src",
-    ],
     generated_headers: [
         "VehicleProtoStub_h",
     ],
@@ -111,6 +110,7 @@ cc_library_static {
     ],
     shared_libs: [
         "libgrpc++_unsecure",
+        "libprotobuf-cpp-full",
     ],
     cflags: [
         "-Wno-unused-parameter",

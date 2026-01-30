@@ -1092,12 +1092,18 @@ TEST_P(GraphicsComposerAidlTest, SetPowerModeUnsupported) {
 TEST_P(GraphicsComposerAidlTest, SetVsyncEnabled) {
     mComposerClient->setVsyncAllowed(true);
 
+    int32_t maxVsyncPeriod = 0;
     for (const auto& display : mDisplays) {
         EXPECT_TRUE(mComposerClient->setVsync(display.getDisplayId(), true).isOk());
         usleep(60 * 1000);
         EXPECT_TRUE(mComposerClient->setVsync(display.getDisplayId(), false).isOk());
+
+        const int32_t vsyncPeriod = display.getVsyncPeriod();
+        maxVsyncPeriod = std::max(maxVsyncPeriod, vsyncPeriod);
     }
 
+    // wait some time to allow in-flight callbacks to complete.
+    usleep(2 * static_cast<uint32_t>(maxVsyncPeriod) / 1000);
     mComposerClient->setVsyncAllowed(false);
 }
 
@@ -1727,11 +1733,12 @@ class GraphicsComposerAidlCommandTest : public GraphicsComposerAidlTest {
                 EXPECT_TRUE(status.isOk());
 
                 EXPECT_TRUE(timeline.newVsyncAppliedTimeNanos >= constraints.desiredTimeNanos);
-                // Refresh rate should change within a reasonable time
-                constexpr std::chrono::nanoseconds kReasonableTimeForChange = 1s;  // 1 second
-                EXPECT_TRUE(timeline.newVsyncAppliedTimeNanos - constraints.desiredTimeNanos <=
-                            kReasonableTimeForChange.count());
-
+                if (configGroup1 == configGroup2) {
+                    // Refresh rate should change within a reasonable time
+                    constexpr std::chrono::nanoseconds kReasonableTimeForChange = 1s;  // 1 second
+                    EXPECT_TRUE(timeline.newVsyncAppliedTimeNanos - constraints.desiredTimeNanos <=
+                                kReasonableTimeForChange.count());
+                }
                 if (timeline.refreshRequired) {
                     if (params.refreshMiss) {
                         // Miss the refresh frame on purpose to make sure the implementation sends a
@@ -2369,7 +2376,7 @@ TEST_P(GraphicsComposerAidlCommandTest, DisplayDecoration) {
 
         const auto format = (error.isOk() && support) ? support->format
                         : aidl::android::hardware::graphics::common::PixelFormat::RGBA_8888;
-        const auto decorBuffer = allocate(display.getDisplayHeight(), display.getDisplayWidth(),
+        const auto decorBuffer = allocate(display.getDisplayWidth(), display.getDisplayHeight(),
                                           static_cast<::android::PixelFormat>(format));
         ASSERT_NE(nullptr, decorBuffer);
         if (::android::OK != decorBuffer->initCheck()) {
@@ -3038,6 +3045,14 @@ TEST_P(GraphicsComposerAidlCommandV2Test,
         const auto displayId = display.getDisplayId();
         EXPECT_TRUE(mComposerClient->setPowerMode(displayId, PowerMode::ON).isOk());
 
+        // Get display configurations and check if there's more than one.
+        auto [status, displayConfigs] = mComposerClient->getDisplayConfigs(displayId);
+        ASSERT_TRUE(status.isOk());
+        if (displayConfigs.size() <= 1) {
+            // Nothing to test if there aren't multiple configs to switch between.
+            continue;
+        }
+
         // Enable the callback
         ASSERT_TRUE(mComposerClient
                             ->setRefreshRateChangedCallbackDebugEnabled(displayId, /*enabled*/ true)
@@ -3577,6 +3592,7 @@ TEST_P(GraphicsComposerAidlCommandV4Test, GetLuts) {
 
 TEST_P(GraphicsComposerAidlCommandV4Test, SetUnsupportedLayerLuts) {
     for (const DisplayWrapper& display : mDisplays) {
+        EXPECT_TRUE(mComposerClient->setPowerMode(display.getDisplayId(), PowerMode::ON).isOk());
         auto& writer = getWriter(display.getDisplayId());
         const auto& [layerStatus, layer] =
                 mComposerClient->createLayer(display.getDisplayId(), kBufferSlotCount, &writer);

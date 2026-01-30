@@ -24,6 +24,7 @@
 #include <aidl/android/hardware/bluetooth/audio/SessionType.h>
 #include <fmq/AidlMessageQueue.h>
 
+#include <functional>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -113,9 +114,10 @@ class BluetoothAudioSession {
 
   /***
    * The function helps to check if this session is ready or not
+   * @param: is_primary_hal - indicates which hal calls it
    * @return: true if the Bluetooth stack has started the specified session
    ***/
-  bool IsSessionReady();
+  bool IsSessionReady(bool is_primary_hal);
 
   /***
    * The report function is used to report that the Bluetooth stack has started
@@ -223,6 +225,7 @@ class BluetoothAudioSession {
   bool UpdateAudioConfig(const AudioConfiguration& audio_config);
   // invoking the registered session_changed_cb_
   void ReportSessionStatus();
+  bool IsSessionReadyInternal();
 
   static inline std::atomic<bool> is_aidl_checked = false;
   static inline std::atomic<bool> is_aidl_available = false;

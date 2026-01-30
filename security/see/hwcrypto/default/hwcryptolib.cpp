@@ -41,7 +41,12 @@ namespace android {
 namespace trusty {
 namespace hwcryptohalservice {
 
-#define HWCRYPTO_KEY_PORT "com.android.trusty.rust.hwcryptohal.V1"
+// note: this port name shall be constructed as the service name followed by
+// the .bnd suffix.
+// if length is >= 64bytes, the shortened version shall be used,
+// by replacing "android.hardware.security.see" with "ahss".
+// here the full name is 63 bytes so we can keep the full uri
+#define HWCRYPTO_KEY_PORT "android.hardware.security.see.hwcrypto.IHwCryptoKey/default.bnd"
 
 // Even though we get the cpp_hwcrypto::IOpaqueKey and cpp_hwcrypto::ICryptoOperationContext and
 // create the ndk_hwcrypto wrappers on this library we cannot cast them back when we need them
@@ -579,51 +584,33 @@ class HwCryptoOperationsNdk : public ndk_hwcrypto::BnHwCryptoOperations {
             return convertStatus(Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT));
         }
         for (unsigned setIdx = 0; setIdx < cppOperationSets.size(); ++setIdx) {
-            if (cppOperationSets[setIdx].operations.size() !=
-                (*operationSets)[setIdx].operations.size()) {
-                LOG(ERROR) << "ndk and cpp operations on set " << setIdx
-                           << " had a different number of elements";
-                return convertStatus(Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT));
-            }
-            for (unsigned operationIdx = 0;
-                 operationIdx < cppOperationSets[setIdx].operations.size(); ++operationIdx) {
-                if (cppOperationSets[setIdx].operations[operationIdx].getTag() ==
-                    cpp_hwcrypto::CryptoOperation::dataOutput) {
-                    if ((*operationSets)[setIdx].operations[operationIdx].getTag() !=
-                        ndk_hwcrypto::CryptoOperation::dataOutput) {
-                        LOG(ERROR)
-                                << "ndk and cpp operations on set " << setIdx << " and operation "
-                                << operationIdx << " had a different operation type";
-                        return convertStatus(
-                                Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT));
-                    }
-                    if (cppOperationSets[setIdx]
-                                .operations[operationIdx]
-                                .get<cpp_hwcrypto::CryptoOperation::dataOutput>()
-                                .getTag() == cpp_hwcrypto::types::OperationData::dataBuffer) {
-                        // This is the only case on which we need to move the data backto the
-                        // original array
-                        if ((*operationSets)[setIdx]
-                                    .operations[operationIdx]
-                                    .get<ndk_hwcrypto::CryptoOperation::dataOutput>()
-                                    .getTag() != ndk_hwcrypto::types::OperationData::dataBuffer) {
-                            LOG(ERROR) << "ndk and cpp operations on set " << setIdx
-                                       << " and operation " << operationIdx
-                                       << " had a different operation data output type";
-                            return convertStatus(
-                                    Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT));
-                        }
-                        (*operationSets)[setIdx]
-                                .operations[operationIdx]
-                                .get<ndk_hwcrypto::CryptoOperation::dataOutput>()
-                                .set<ndk_hwcrypto::types::OperationData::dataBuffer>(
-                                        cppOperationSets[setIdx]
-                                                .operations[operationIdx]
-                                                .get<cpp_hwcrypto::CryptoOperation::dataOutput>()
-                                                .get<cpp_hwcrypto::types::OperationData::
-                                                             dataBuffer>());
-                    }
+            // We will get rid of all inputs on the operation set parameter and then copy the return
+            // results. This will contain only the operations that contain generated outputs from
+            // the service.
+            (*operationSets)[setIdx].operations.clear();
+            int operationIdx = 0;
+            for (auto& cppOperation : cppOperationSets[setIdx].operations) {
+                if (cppOperation.getTag() != cpp_hwcrypto::CryptoOperation::dataOutput) {
+                    LOG(ERROR) << "cpp operations on set " << setIdx << " and operation "
+                               << operationIdx << " is not CryptoOperation::dataOutput";
+                    return convertStatus(Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT));
                 }
+                auto cppDataOperation =
+                        cppOperation.get<cpp_hwcrypto::CryptoOperation::dataOutput>();
+                if (cppDataOperation.getTag() != cpp_hwcrypto::types::OperationData::dataBuffer) {
+                    LOG(ERROR) << "cpp operations on set " << setIdx << " and operation "
+                               << operationIdx
+                               << " is not CryptoOperation::dataOutput(OperationData::dataBuffer)";
+                    return convertStatus(Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT));
+                }
+                ndk_hwcrypto::types::OperationData ndkOperationData;
+                ndkOperationData.set<ndk_hwcrypto::types::OperationData::dataBuffer>(
+                        cppDataOperation.get<cpp_hwcrypto::types::OperationData::dataBuffer>());
+                ndk_hwcrypto::CryptoOperation ndkOperation;
+                ndkOperation.set<ndk_hwcrypto::CryptoOperation::dataOutput>(
+                        std::move(ndkOperationData));
+                (*operationSets)[setIdx].operations.push_back(std::move(ndkOperation));
+                ++operationIdx;
             }
         }
         return convertStatus(status);
@@ -715,6 +702,19 @@ class OpaqueKeyNdk : public ndk_hwcrypto::BnOpaqueKey {
                 "android is not authorized to call setProtectionId");
     }
 };
+
+static void create_key_mapping_if_success(Status status,
+                                          sp<cpp_hwcrypto::IOpaqueKey>& binder_return,
+                                          std::shared_ptr<ndk_hwcrypto::IOpaqueKey>* aidl_return) {
+    if (status.isOk()) {
+        if ((binder_return != nullptr)) {
+            insertBinderMapping<cpp_hwcrypto::IOpaqueKey, ndk_hwcrypto::IOpaqueKey, OpaqueKeyNdk,
+                                keyMapping>(binder_return, aidl_return);
+        } else {
+            *aidl_return = nullptr;
+        }
+    }
+}
 
 Result<void> HwCryptoKey::connectToTrusty(const char* tipcDev) {
     assert(!mSession);
@@ -810,14 +810,7 @@ ndk::ScopedAStatus HwCryptoKey::importClearKey(
         return convertStatus(status);
     }
     status = mHwCryptoServer->importClearKey(explicitKeyCpp.value(), cppKeyPolicy, &binder_return);
-    if (status.isOk()) {
-        if ((binder_return != nullptr)) {
-            insertBinderMapping<cpp_hwcrypto::IOpaqueKey, ndk_hwcrypto::IOpaqueKey, OpaqueKeyNdk,
-                                keyMapping>(binder_return, aidl_return);
-        } else {
-            *aidl_return = nullptr;
-        }
-    }
+    create_key_mapping_if_success(status, binder_return, aidl_return);
     return convertStatus(status);
 }
 
@@ -840,10 +833,7 @@ ndk::ScopedAStatus HwCryptoKey::keyTokenImport(
     // trying first a shallow copy of the vector
     requestedKeyCpp.keyToken = requestedKey.keyToken;
     status = mHwCryptoServer->keyTokenImport(requestedKeyCpp, sealingDicePolicy, &binder_return);
-    if (status.isOk()) {
-        std::shared_ptr<ndk_hwcrypto::IOpaqueKey> opaqueKey = OpaqueKeyNdk::Create(binder_return);
-        *aidl_return = opaqueKey;
-    }
+    create_key_mapping_if_success(status, binder_return, aidl_return);
     return convertStatus(status);
 }
 
